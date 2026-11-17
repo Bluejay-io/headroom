@@ -33,6 +33,10 @@ final class UsageStore: ObservableObject {
         }
         if Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+            if !UserDefaults.standard.bool(forKey: "didSetUpLaunchAtLogin") {
+                UserDefaults.standard.set(true, forKey: "didSetUpLaunchAtLogin")
+                launchAtLogin = true
+            }
         }
     }
 

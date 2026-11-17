@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${VERSION:-0.1.0}"
+BUNDLE_ID="${BUNDLE_ID:-io.bluejay.headroom}"
 APP="dist/Headroom.app"
 
 swift build -c release --arch arm64 --arch x86_64
@@ -21,7 +22,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>Headroom</string>
   <key>CFBundleDisplayName</key><string>Headroom</string>
-  <key>CFBundleIdentifier</key><string>io.bluejay.headroom</string>
+  <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleExecutable</key><string>Headroom</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>

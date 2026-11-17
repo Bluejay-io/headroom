@@ -234,7 +234,7 @@ private struct PermissionsPage: View {
             Done(label: "Allowed")
         case .denied:
             Button("Open Settings") {
-                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=io.bluejay.headroom")!)
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "")")!)
             }
         default:
             Button("Allow") {

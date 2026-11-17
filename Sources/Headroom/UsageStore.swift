@@ -20,13 +20,24 @@ final class UsageStore: ObservableObject {
     private var nextFetch: [Provider: Date] = [:]
     private var lastAttempt: [Provider: Date] = [:]
     private var backoff: [Provider: TimeInterval] = [:]
-    private static let interval: [Provider: TimeInterval] = [.claude: 180, .codex: 60]
+    private static let interval: [Provider: TimeInterval] = [.claude: 300, .codex: 60]
 
     init() {
         let defaults = UserDefaults.standard
         defaults.register(defaults: ["notificationsEnabled": true, "alertThreshold": 20.0])
         notificationsEnabled = defaults.bool(forKey: "notificationsEnabled")
         alertThreshold = defaults.double(forKey: "alertThreshold")
+        for provider in Provider.allCases {
+            guard let data = defaults.data(forKey: "cache.\(provider.rawValue)"),
+                  let cached = try? JSONDecoder().decode(Cache.self, from: data) else { continue }
+            states[provider] = ProviderState(windows: cached.windows, plan: cached.plan, signedIn: true, updatedAt: cached.updatedAt, loading: false)
+        }
+    }
+
+    private struct Cache: Codable {
+        let windows: [LimitWindow]
+        let plan: String?
+        let updatedAt: Date
     }
 
     var lastUpdated: Date? { states.values.compactMap(\.updatedAt).max() }
@@ -48,9 +59,8 @@ final class UsageStore: ObservableObject {
         let now = Date()
         let due = Provider.allCases.filter { provider in
             guard let next = nextFetch[provider], now < next else { return true }
-            guard force, backoff[provider] == nil else { return false }
-            guard let last = lastAttempt[provider] else { return true }
-            return now.timeIntervalSince(last) >= 30
+            guard force, let last = lastAttempt[provider] else { return force }
+            return now.timeIntervalSince(last) >= (backoff[provider] == nil ? 30 : 60)
         }
         guard !due.isEmpty else { return }
         refreshing = true
@@ -74,12 +84,14 @@ final class UsageStore: ObservableObject {
             backoff[provider] = wait
             nextFetch[provider] = Date().addingTimeInterval(wait)
             state.signedIn = true
-            if state.windows.isEmpty {
-                state.error = "Signed in. \(provider.name) is busy, so your numbers will show \(Format.reset(Date().addingTimeInterval(wait)))."
-            }
+            state.retryAt = nextFetch[provider]
         case .success(let value):
             backoff[provider] = nil
             state.signedIn = true
+            state.retryAt = nil
+            if let data = try? JSONEncoder().encode(Cache(windows: value.windows, plan: value.plan, updatedAt: Date())) {
+                UserDefaults.standard.set(data, forKey: "cache.\(provider.rawValue)")
+            }
             state.windows = value.windows
             state.plan = value.plan
             state.error = nil
@@ -87,6 +99,7 @@ final class UsageStore: ObservableObject {
             notify(provider, value.windows)
         case .failure(let error):
             state.signedIn = false
+            state.retryAt = nil
             state.error = error.localizedDescription
         }
         states[provider] = state

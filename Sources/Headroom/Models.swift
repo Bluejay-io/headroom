@@ -1,6 +1,6 @@
 import Foundation
 
-struct LimitWindow: Identifiable, Equatable {
+struct LimitWindow: Identifiable, Equatable, Codable {
     let id: String
     let label: String
     let usedPercent: Double
@@ -35,6 +35,7 @@ struct ProviderState {
     var plan: String?
     var error: String?
     var signedIn = false
+    var retryAt: Date?
     var updatedAt: Date?
     var loading = true
 

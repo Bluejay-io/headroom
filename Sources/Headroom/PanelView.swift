@@ -35,6 +35,12 @@ private struct ProviderSection: View {
             }
             if let error = state.error {
                 ErrorCard(message: error, lastSeen: state.updatedAt)
+            } else if let retryAt = state.retryAt, state.windows.isEmpty {
+                TimelineView(.periodic(from: .now, by: 15)) { context in
+                    ErrorCard(message: retryAt > context.date
+                        ? "Signed in. Claude's usage service is rate limiting right now, so your numbers will show \(Format.reset(retryAt, now: context.date)). Refresh tries again sooner."
+                        : "Signed in. Checking Claude now…", lastSeen: nil)
+                }
             }
             if state.loading && state.windows.isEmpty {
                 ForEach(0..<2, id: \.self) { _ in LimitRow.placeholder }

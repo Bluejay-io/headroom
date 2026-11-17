@@ -2,15 +2,19 @@ import SwiftUI
 
 struct PanelView: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject var updater: Updater
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(Provider.allCases.enumerated()), id: \.element) { index, provider in
                 if index > 0 { Divider().padding(.vertical, 12) }
-                ProviderSection(provider: provider, state: store.states[provider] ?? ProviderState())
+                ProviderSection(provider: provider, state: store.states[provider] ?? ProviderState(), store: store)
+            }
+            if let version = updater.available {
+                UpdateBanner(version: version, updater: updater).padding(.top, 14)
             }
             Divider().padding(.top, 12).padding(.bottom, 8)
-            Footer(store: store)
+            Footer(store: store, updater: updater)
         }
         .padding(16)
         .frame(width: 320)
@@ -20,6 +24,7 @@ struct PanelView: View {
 private struct ProviderSection: View {
     let provider: Provider
     let state: ProviderState
+    @ObservedObject var store: UsageStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -28,6 +33,16 @@ private struct ProviderSection: View {
                     .fill(provider.brandColor, style: FillStyle(eoFill: true))
                     .frame(width: 15, height: 15)
                 Text(provider.name).font(.system(size: 13, weight: .semibold))
+                if state.resetCount > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "ticket").font(.system(size: 10))
+                        Text("\(state.resetCount)").font(.system(size: 11, weight: .medium).monospacedDigit())
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(.quaternary.opacity(0.6)))
+                    .help("\(state.resetCount) reset\(state.resetCount == 1 ? "" : "s") you can use")
+                }
                 Spacer()
                 if let plan = state.plan {
                     Text(plan).font(.system(size: 11)).foregroundStyle(.tertiary)
@@ -48,6 +63,113 @@ private struct ProviderSection: View {
                 ForEach(state.windows) { window in
                     LimitRow(window: window).opacity(state.error == nil ? 1 : 0.5)
                 }
+            }
+            if !state.resets.isEmpty || state.resetNote != nil {
+                ResetsList(provider: provider, state: state, store: store)
+            }
+        }
+    }
+}
+
+private struct ResetsList: View {
+    let provider: Provider
+    let state: ProviderState
+    @ObservedObject var store: UsageStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(state.resets) { option in
+                if store.confirming == option.id {
+                    ConfirmCard(provider: provider, option: option, store: store)
+                } else {
+                    row(option)
+                }
+            }
+            if let note = state.resetNote {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    if context.date.timeIntervalSince(note.at) < 600 {
+                        Label(note.text, systemImage: note.good ? "checkmark.circle.fill" : "info.circle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(note.good ? AnyShapeStyle(Color.green) : AnyShapeStyle(.secondary))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    private func row(_ option: ResetOption) -> some View {
+        let low = state.windows.contains { $0.status() == .low }
+        return HStack(spacing: 6) {
+            Image(systemName: "ticket").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(option.title).font(.system(size: 12))
+            Text(summary(option)).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+            Spacer(minLength: 4)
+            if state.claiming == option.id {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("Use…") { store.confirming = option.id }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(low ? .accentColor : nil)
+                    .disabled(state.claiming != nil)
+            }
+        }
+        .help(option.detail)
+    }
+
+    private func summary(_ option: ResetOption) -> String {
+        var parts = ["\(option.count) left"]
+        if let expires = option.expiresAt {
+            parts.append("until " + expires.formatted(.dateTime.day().month(.abbreviated)))
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct ConfirmCard: View {
+    let provider: Provider
+    let option: ResetOption
+    @ObservedObject var store: UsageStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Use one \(provider.name) \(option.title)?")
+                .font(.system(size: 12, weight: .semibold))
+            Text("\(option.detail) You'll have \(option.count - 1) left. This can't be undone.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { store.confirming = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Use reset") { Task { await store.useReset(provider, option) } }
+                    .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+    }
+}
+
+private struct UpdateBanner: View {
+    let version: String
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+            Text(updater.installing ? "Updating to \(version)… Headroom will reopen." : "Headroom \(version) is available.")
+                .font(.system(size: 12))
+            Spacer()
+            if updater.installing {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("Update") { updater.install() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
             }
         }
     }
@@ -145,6 +267,7 @@ private struct Bar: View {
 
 private struct Footer: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject var updater: Updater
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 5)) { context in
@@ -167,6 +290,8 @@ private struct Footer: View {
                         ForEach([10.0, 20.0, 30.0], id: \.self) { Text("\(Int($0))% left").tag($0) }
                     }
                     Divider()
+                    Button("Check for Updates") { Task { await updater.check() } }
+                    Text("Headroom \(updater.current)" + (updater.available == nil && updater.checkedAt != nil ? " (up to date)" : ""))
                     Button("Show Welcome…") { NotificationCenter.default.post(name: .showOnboarding, object: nil) }
                     Button("Quit Headroom") { NSApp.terminate(nil) }
                 } label: {

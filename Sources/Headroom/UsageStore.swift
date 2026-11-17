@@ -6,6 +6,7 @@ import UserNotifications
 final class UsageStore: ObservableObject {
     @Published private(set) var states: [Provider: ProviderState] = [.claude: ProviderState(), .codex: ProviderState()]
     @Published private(set) var refreshing = false
+    @Published var confirming: String?
     @Published var notificationsEnabled: Bool {
         didSet { UserDefaults.standard.set(notificationsEnabled, forKey: "notificationsEnabled") }
     }
@@ -20,6 +21,7 @@ final class UsageStore: ObservableObject {
     private var nextFetch: [Provider: Date] = [:]
     private var lastAttempt: [Provider: Date] = [:]
     private var backoff: [Provider: TimeInterval] = [:]
+    private var codexDetailsAt: Date?
     private static let interval: [Provider: TimeInterval] = [.claude: 300, .codex: 60]
 
     init() {
@@ -30,7 +32,8 @@ final class UsageStore: ObservableObject {
         for provider in Provider.allCases {
             guard let data = defaults.data(forKey: "cache.\(provider.rawValue)"),
                   let cached = try? JSONDecoder().decode(Cache.self, from: data) else { continue }
-            states[provider] = ProviderState(windows: cached.windows, plan: cached.plan, signedIn: true, updatedAt: cached.updatedAt, loading: false)
+            states[provider] = ProviderState(windows: cached.windows, plan: cached.plan, signedIn: true, updatedAt: cached.updatedAt,
+                                             loading: false, resets: cached.resets ?? [])
         }
     }
 
@@ -38,6 +41,7 @@ final class UsageStore: ObservableObject {
         let windows: [LimitWindow]
         let plan: String?
         let updatedAt: Date
+        var resets: [ResetOption]?
     }
 
     var lastUpdated: Date? { states.values.compactMap(\.updatedAt).max() }
@@ -66,14 +70,15 @@ final class UsageStore: ObservableObject {
         refreshing = true
         for provider in due { lastAttempt[provider] = now }
         async let claude = due.contains(.claude) ? Result { try await ClaudeSource.fetch() } : nil
-        async let codex = due.contains(.codex) ? Result { try await CodexSource.fetch() } : nil
+        let codexDetails = force || codexDetailsAt.map { now.timeIntervalSince($0) > 900 } ?? true
+        async let codex = due.contains(.codex) ? Result { try await CodexSource.fetch(resetDetails: codexDetails) } : nil
         if let result = await claude { apply(.claude, result) }
         if let result = await codex { apply(.codex, result) }
         refreshing = false
         onChange?()
     }
 
-    private func apply(_ provider: Provider, _ result: Result<(windows: [LimitWindow], plan: String?), Error>) {
+    private func apply(_ provider: Provider, _ result: Result<ProviderReading, Error>) {
         var state = states[provider] ?? ProviderState()
         state.loading = false
         let interval = Self.interval[provider] ?? 60
@@ -85,18 +90,29 @@ final class UsageStore: ObservableObject {
             nextFetch[provider] = Date().addingTimeInterval(wait)
             state.signedIn = true
             state.retryAt = nextFetch[provider]
-        case .success(let value):
+        case .success(var value):
+            if provider == .codex && value.resetDetails { codexDetailsAt = Date() }
+            if !value.resetDetails {
+                value.resets = value.resets.map { option in
+                    guard let previous = state.resets.first(where: { $0.id == option.id }) else { return option }
+                    var merged = option
+                    merged.title = previous.title
+                    merged.expiresAt = previous.expiresAt
+                    return merged
+                }
+            }
             backoff[provider] = nil
             state.signedIn = true
             state.retryAt = nil
-            if let data = try? JSONEncoder().encode(Cache(windows: value.windows, plan: value.plan, updatedAt: Date())) {
+            if let data = try? JSONEncoder().encode(Cache(windows: value.windows, plan: value.plan, updatedAt: Date(), resets: value.resets)) {
                 UserDefaults.standard.set(data, forKey: "cache.\(provider.rawValue)")
             }
             state.windows = value.windows
             state.plan = value.plan
+            state.resets = value.resets
             state.error = nil
             state.updatedAt = Date()
-            notify(provider, value.windows)
+            notify(provider, value.windows, resets: state.resetCount)
         case .failure(let error):
             state.signedIn = false
             state.retryAt = nil
@@ -105,14 +121,15 @@ final class UsageStore: ObservableObject {
         states[provider] = state
     }
 
-    private func notify(_ provider: Provider, _ windows: [LimitWindow]) {
+    private func notify(_ provider: Provider, _ windows: [LimitWindow], resets: Int) {
         for window in windows {
             let key = window.id
             if window.leftPercent < alertThreshold {
                 guard !alerted.contains(key) else { continue }
                 alerted.insert(key)
                 post(title: "\(provider.name) \(window.label) limit is low",
-                     body: "\(Int(window.leftPercent))% left. Resets \(Format.reset(window.resetsAt)).")
+                     body: "\(Int(window.leftPercent))% left. Resets \(Format.reset(window.resetsAt))."
+                        + (resets > 0 ? " You have \(resets) \(provider.name) reset\(resets == 1 ? "" : "s") you could use from Headroom." : ""))
             } else if alerted.contains(key), window.leftPercent >= 95 {
                 alerted.remove(key)
                 post(title: "\(provider.name) \(window.label) has reset", body: "You're back to \(Int(window.leftPercent))%.")
@@ -126,6 +143,40 @@ final class UsageStore: ObservableObject {
         content.title = title
         content.body = body
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    func useReset(_ provider: Provider, _ option: ResetOption) async {
+        confirming = nil
+        guard states[provider]?.claiming == nil else { return }
+        states[provider]?.claiming = option.id
+        states[provider]?.resetNote = nil
+        let key = "pendingClaim.\(provider.rawValue).\(option.creditId ?? "next")"
+        let requestId = UserDefaults.standard.string(forKey: key) ?? UUID().uuidString.lowercased()
+        UserDefaults.standard.set(requestId, forKey: key)
+        var note: ResetNote
+        do {
+            let outcome = provider == .claude
+                ? try await ClaudeSource.claim(grantId: option.creditId ?? "", requestId: requestId)
+                : try await CodexSource.claim(creditId: option.creditId, idempotencyKey: requestId)
+            UserDefaults.standard.removeObject(forKey: key)
+            switch outcome {
+            case .reset: note = ResetNote(text: "\(option.title) used. Your \(provider.name) limits are fresh.", good: true, at: Date())
+            case .alreadyUsed: note = ResetNote(text: "That reset had already gone through. Showing fresh numbers.", good: true, at: Date())
+            case .nothingToReset: note = ResetNote(text: "\(provider.name) had nothing to reset, so no reset was spent.", good: false, at: Date())
+            case .noCredit: note = ResetNote(text: "\(provider.name) says there's no reset left to use.", good: false, at: Date())
+            }
+        } catch let failure as ClaimFailure {
+            if failure.settled { UserDefaults.standard.removeObject(forKey: key) }
+            note = ResetNote(text: failure.message, good: false, at: Date())
+        } catch {
+            note = ResetNote(text: "Couldn't reach \(provider.name): \(error.localizedDescription) Trying again won't spend a second reset.", good: false, at: Date())
+        }
+        states[provider]?.claiming = nil
+        states[provider]?.resetNote = note
+        nextFetch[provider] = nil
+        if provider == .codex { codexDetailsAt = nil }
+        while refreshing { try? await Task.sleep(for: .milliseconds(300)) }
+        await refresh()
     }
 
     func refreshNotificationStatus() async {

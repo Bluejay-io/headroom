@@ -10,9 +10,15 @@ Headroom shows how much is left in each limit window (5-hour, weekly, model-spec
 curl -fsSL https://raw.githubusercontent.com/bluejay-io/headroom/main/install.sh | bash
 ```
 
-Requires macOS 14 or newer, plus [Claude Code](https://claude.com/claude-code) and/or the [Codex CLI](https://github.com/openai/codex) signed in. Run the same command again to update.
+Requires macOS 14 or newer, plus [Claude Code](https://claude.com/claude-code) and/or the [Codex CLI](https://github.com/openai/codex) signed in. From 0.3.0 on, Headroom checks GitHub for new releases and shows an **Update** button in the panel. Older versions update by running the same command again.
 
 The first time Headroom reads Claude Code's login, macOS may ask for Keychain access. Choose **Always Allow**.
+
+## Resets
+
+Claude and Codex sometimes grant free limit resets. Headroom shows how many you have next to each provider, what each one refills and when it expires. **Use…** opens a confirmation first, and nothing is spent until you press **Use reset**. Each attempt carries a one-time request ID, so retrying after a network error can't spend a second reset.
+
+Spending a reset is the only thing Headroom ever changes on your account.
 
 ## Where the numbers come from
 

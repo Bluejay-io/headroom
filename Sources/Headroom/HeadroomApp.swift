@@ -32,6 +32,7 @@ enum Main {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = UsageStore()
+    private let updater = Updater()
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var cancellables: Set<AnyCancellable> = []
@@ -43,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.action = #selector(toggle)
         statusItem.button?.setAccessibilityLabel("Headroom")
 
-        let host = NSHostingController(rootView: PanelView(store: store))
+        let host = NSHostingController(rootView: PanelView(store: store, updater: updater))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .transient
@@ -67,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         store.start()
+        updater.start()
         if !UserDefaults.standard.bool(forKey: "onboardingDone") { showOnboarding(restart: false) }
     }
 

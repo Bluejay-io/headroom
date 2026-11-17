@@ -38,6 +38,11 @@ struct ProviderState {
     var retryAt: Date?
     var updatedAt: Date?
     var loading = true
+    var resets: [ResetOption] = []
+    var claiming: String?
+    var resetNote: ResetNote?
+
+    var resetCount: Int { resets.reduce(0) { $0 + $1.count } }
 
     var barWindows: [LimitWindow] {
         Array(windows.sorted { ($0.duration ?? .infinity) < ($1.duration ?? .infinity) }.prefix(2))
@@ -63,4 +68,36 @@ func windowLabel(minutes: Int) -> String {
     case let m where m % 60 == 0: return "\(m / 60)-hour"
     default: return "\(minutes)-minute"
     }
+}
+
+struct ProviderReading {
+    var windows: [LimitWindow]
+    var plan: String?
+    var resets: [ResetOption]
+    var resetDetails = true
+}
+
+struct ResetOption: Identifiable, Equatable, Codable {
+    let id: String
+    var title: String
+    let detail: String
+    let count: Int
+    var expiresAt: Date?
+    let creditId: String?
+}
+
+enum ResetOutcome {
+    case reset, nothingToReset, alreadyUsed, noCredit
+}
+
+struct ClaimFailure: LocalizedError {
+    let message: String
+    let settled: Bool
+    var errorDescription: String? { message }
+}
+
+struct ResetNote: Equatable {
+    let text: String
+    let good: Bool
+    let at: Date
 }

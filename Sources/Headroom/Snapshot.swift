@@ -5,7 +5,9 @@ import SwiftUI
 enum Snapshot {
     static func write(to directory: URL) async {
         let store = UsageStore()
+        let updater = Updater()
         await store.refresh()
+        await updater.check()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let savedStep = UserDefaults.standard.integer(forKey: "onboardingStep")
         for step in OnboardingStep.allCases {
@@ -36,7 +38,7 @@ enum Snapshot {
                 NSGraphicsContext.restoreGraphicsState()
                 try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("menubar-\(name).png"))
             }
-            let panel = PanelView(store: store)
+            let panel = PanelView(store: store, updater: updater)
                 .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.97))
                 .environment(\.colorScheme, scheme)
             let renderer = ImageRenderer(content: panel)
@@ -44,6 +46,22 @@ enum Snapshot {
             if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: directory.appendingPathComponent("panel-\(name).png"))
+            }
+            if name == "light", let option = store.states[.claude]?.resets.last {
+                store.confirming = option.id
+                let view = NSHostingView(rootView: PanelView(store: store, updater: updater).background(Color(white: 0.97)).environment(\.colorScheme, .light))
+                view.frame = NSRect(origin: .zero, size: view.fittingSize)
+                let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.contentView = view
+                window.appearance = NSAppearance(named: .aqua)
+                window.backgroundColor = NSColor(white: 0.97, alpha: 1)
+                try? await Task.sleep(for: .milliseconds(600))
+                view.layoutSubtreeIfNeeded()
+                if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("panel-confirm.png"))
+                }
+                store.confirming = nil
             }
         }
     }

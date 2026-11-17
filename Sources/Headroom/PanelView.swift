@@ -147,7 +147,7 @@ private struct Footer: View {
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
                 Spacer()
                 Button {
-                    Task { await store.refresh() }
+                    Task { await store.refresh(force: true) }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .rotationEffect(.degrees(store.refreshing ? 360 : 0))
@@ -161,6 +161,7 @@ private struct Footer: View {
                         ForEach([10.0, 20.0, 30.0], id: \.self) { Text("\(Int($0))% left").tag($0) }
                     }
                     Divider()
+                    Button("Show Welcome…") { NotificationCenter.default.post(name: .showOnboarding, object: nil) }
                     Button("Quit Headroom") { NSApp.terminate(nil) }
                 } label: {
                     Image(systemName: "gearshape")

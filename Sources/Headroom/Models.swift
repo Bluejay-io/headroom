@@ -34,6 +34,7 @@ struct ProviderState {
     var windows: [LimitWindow] = []
     var plan: String?
     var error: String?
+    var signedIn = false
     var updatedAt: Date?
     var loading = true
 
@@ -46,6 +47,10 @@ struct SourceError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+}
+
+struct RateLimited: Error {
+    let retryAfter: TimeInterval?
 }
 
 func windowLabel(minutes: Int) -> String {

@@ -16,6 +16,10 @@ enum ClaudeSource {
         if status == 401 || status == 403 {
             throw SourceError("Claude Code login expired. Open Claude Code once to refresh it.")
         }
+        if status == 429 {
+            let header = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")
+            throw RateLimited(retryAfter: header.flatMap(TimeInterval.init))
+        }
         guard status == 200 else { throw SourceError("Claude returned HTTP \(status).") }
         return (try parse(data), creds.plan)
     }

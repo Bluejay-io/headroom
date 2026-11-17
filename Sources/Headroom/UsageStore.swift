@@ -9,6 +9,7 @@ final class UsageStore: ObservableObject {
     @Published var notificationsEnabled: Bool {
         didSet { UserDefaults.standard.set(notificationsEnabled, forKey: "notificationsEnabled") }
     }
+    @Published private(set) var notificationStatus: UNAuthorizationStatus = .notDetermined
     @Published var alertThreshold: Double {
         didSet { UserDefaults.standard.set(alertThreshold, forKey: "alertThreshold") }
     }
@@ -16,6 +17,10 @@ final class UsageStore: ObservableObject {
     var onChange: (() -> Void)?
     private var timer: Timer?
     private var alerted: Set<String> = []
+    private var nextFetch: [Provider: Date] = [:]
+    private var lastAttempt: [Provider: Date] = [:]
+    private var backoff: [Provider: TimeInterval] = [:]
+    private static let interval: [Provider: TimeInterval] = [.claude: 180, .codex: 60]
 
     init() {
         let defaults = UserDefaults.standard
@@ -28,32 +33,32 @@ final class UsageStore: ObservableObject {
 
     func start() {
         Task { await refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
-        if Bundle.main.bundleIdentifier != nil {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
-            if !UserDefaults.standard.bool(forKey: "didSetUpLaunchAtLogin") {
-                UserDefaults.standard.set(true, forKey: "didSetUpLaunchAtLogin")
-                launchAtLogin = true
-            }
-        }
+        Task { await refreshNotificationStatus() }
     }
 
     func refreshIfStale() {
-        guard let lastUpdated, Date().timeIntervalSince(lastUpdated) < 20 else {
-            Task { await refresh() }
-            return
-        }
+        Task { await refresh() }
     }
 
-    func refresh() async {
+    func refresh(force: Bool = false) async {
         guard !refreshing else { return }
+        let now = Date()
+        let due = Provider.allCases.filter { provider in
+            guard let next = nextFetch[provider], now < next else { return true }
+            guard force, backoff[provider] == nil else { return false }
+            guard let last = lastAttempt[provider] else { return true }
+            return now.timeIntervalSince(last) >= 30
+        }
+        guard !due.isEmpty else { return }
         refreshing = true
-        async let claude = Result { try await ClaudeSource.fetch() }
-        async let codex = Result { try await CodexSource.fetch() }
-        apply(.claude, await claude)
-        apply(.codex, await codex)
+        for provider in due { lastAttempt[provider] = now }
+        async let claude = due.contains(.claude) ? Result { try await ClaudeSource.fetch() } : nil
+        async let codex = due.contains(.codex) ? Result { try await CodexSource.fetch() } : nil
+        if let result = await claude { apply(.claude, result) }
+        if let result = await codex { apply(.codex, result) }
         refreshing = false
         onChange?()
     }
@@ -61,14 +66,27 @@ final class UsageStore: ObservableObject {
     private func apply(_ provider: Provider, _ result: Result<(windows: [LimitWindow], plan: String?), Error>) {
         var state = states[provider] ?? ProviderState()
         state.loading = false
+        let interval = Self.interval[provider] ?? 60
+        nextFetch[provider] = Date().addingTimeInterval(interval)
         switch result {
+        case .failure(let limited as RateLimited):
+            let wait = max(limited.retryAfter ?? 0, min((backoff[provider] ?? interval) * 2, 1800))
+            backoff[provider] = wait
+            nextFetch[provider] = Date().addingTimeInterval(wait)
+            state.signedIn = true
+            if state.windows.isEmpty {
+                state.error = "Signed in. \(provider.name) is busy, so your numbers will show \(Format.reset(Date().addingTimeInterval(wait)))."
+            }
         case .success(let value):
+            backoff[provider] = nil
+            state.signedIn = true
             state.windows = value.windows
             state.plan = value.plan
             state.error = nil
             state.updatedAt = Date()
             notify(provider, value.windows)
         case .failure(let error):
+            state.signedIn = false
             state.error = error.localizedDescription
         }
         states[provider] = state
@@ -95,6 +113,21 @@ final class UsageStore: ObservableObject {
         content.title = title
         content.body = body
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    func refreshNotificationStatus() async {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    func requestNotifications() async {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
+        await refreshNotificationStatus()
+    }
+
+    func isConnected(_ provider: Provider) -> Bool {
+        states[provider]?.signedIn ?? false
     }
 
     var launchAtLogin: Bool {

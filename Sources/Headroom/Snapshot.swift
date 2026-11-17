@@ -7,6 +7,22 @@ enum Snapshot {
         let store = UsageStore()
         await store.refresh()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let savedStep = UserDefaults.standard.integer(forKey: "onboardingStep")
+        for step in OnboardingStep.allCases {
+            UserDefaults.standard.set(step.rawValue, forKey: "onboardingStep")
+            let view = NSHostingView(rootView: OnboardingView(store: store) {})
+            view.frame = NSRect(x: 0, y: 0, width: 560, height: 460)
+            let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = view
+            window.appearance = NSAppearance(named: .aqua)
+            try? await Task.sleep(for: .milliseconds(900))
+            view.layoutSubtreeIfNeeded()
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("onboarding-\(step.rawValue).png"))
+            }
+        }
+        UserDefaults.standard.set(savedStep, forKey: "onboardingStep")
         for (name, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {
             NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
                 let status = StatusImage.make(states: store.states)

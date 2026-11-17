@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Installs Headroom into ~/Applications and starts it.
+# Installs Headroom into /Applications and starts it.
 # curl -fsSL https://raw.githubusercontent.com/bluejay-io/headroom/main/install.sh | bash
 set -euo pipefail
 
 REPO="bluejay-io/headroom"
 URL="https://github.com/$REPO/releases/latest/download/Headroom.zip"
-DEST="$HOME/Applications"
+DEST="/Applications"
+if [ ! -w "$DEST" ]; then
+  DEST="$HOME/Applications"
+  echo "Note: /Applications isn't writable, installing to ~/Applications instead." >&2
+  echo "Menu bar managers on macOS 27 can't keep apps visible from there." >&2
+fi
 
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "Headroom only runs on macOS." >&2
@@ -30,6 +35,7 @@ if pgrep -x Headroom >/dev/null; then
   pkill -x Headroom 2>/dev/null || true
 fi
 
+[ "$DEST" = "/Applications" ] && rm -rf "$HOME/Applications/Headroom.app"
 mkdir -p "$DEST"
 rm -rf "$DEST/Headroom.app"
 mv "$tmp/Headroom.app" "$DEST/Headroom.app"
